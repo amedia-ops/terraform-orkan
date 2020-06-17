@@ -83,7 +83,6 @@ data "template_file" "controller-configs" {
     eth1_address           = openstack_networking_port_v2.controller-vrf-ports[count.index].all_fixed_ips[0]
     eth1_gateway           = cidrhost("${openstack_networking_port_v2.controller-vrf-ports[count.index].all_fixed_ips[0]}/26", 1)
     dns_zone               = var.dns_zone
-    kube_apiserver_vip     = var.kube_apiserver_vip
     api_virtual_ip         = openstack_networking_port_v2.kube-apiserver-vip.all_fixed_ips[0]
   }
 }
