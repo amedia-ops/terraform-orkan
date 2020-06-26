@@ -30,7 +30,7 @@ resource "openstack_compute_instance_v2" "workers" {
   name              = "${var.cluster_name}-worker-${count.index}"
   tags              = [var.cluster_name]
   flavor_name       = var.worker_type
-  image_name        = var.os_image
+  image_name        = var.os_worker_image
   user_data         = element(data.ct_config.worker-ignitions.*.rendered, count.index)
   availability_zone = element(var.availability_zones, count.index)
   network {
