@@ -46,6 +46,9 @@ resource "null_resource" "copy-controller-secrets" {
 # Secure copy kubeconfig to all workers. Activates kubelet.service.
 resource "null_resource" "copy-worker-secrets" {
   count = var.worker_count
+  triggers = {
+    instance_id = element(openstack_compute_instance_v2.workers.*.id, count.index)
+  }
 
   connection {
     type    = "ssh"
