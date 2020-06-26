@@ -84,12 +84,18 @@ variable "controller_type" {
 variable "worker_type" {
   type        = string
   default     = "m1.medium"
-  description = "Machine type for controllers (see `openstack flavor list`)"
+  description = "Machine type for workers (see `openstack flavor list`)"
 }
 
-variable "os_image" {
+variable "os_controller_image" {
   type        = string
-  description = "Container Linux image for instances (e.g. coreos-stable)"
+  description = "Container Linux image for controllers (e.g. coreos-stable)"
+  default     = "coreos-stable"
+}
+
+variable "os_worker_image" {
+  type        = string
+  description = "Container Linux image for workers (e.g. coreos-stable)"
   default     = "coreos-stable"
 }
 

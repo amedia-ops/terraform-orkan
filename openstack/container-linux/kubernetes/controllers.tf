@@ -34,7 +34,7 @@ resource "openstack_compute_instance_v2" "controllers" {
   name              = "${var.cluster_name}-controller-${count.index}"
   tags              = [var.cluster_name]
   flavor_name       = var.controller_type
-  image_name        = var.os_image
+  image_name        = var.os_controller_image
   user_data         = element(data.ct_config.controller-ignitions.*.rendered, count.index)
   availability_zone = element(var.availability_zones, count.index)
   network {
