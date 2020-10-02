@@ -16,6 +16,8 @@ module "bootstrap" {
   service_cidr          = var.service_cidr
   oidc_client_id        = var.oidc_client_id
   cluster_domain_suffix = var.cluster_domain_suffix
+  enable_reporting      = var.enable_reporting
+  enable_aggregation    = var.enable_aggregation
 }
 
 data "template_file" "etcd_ipaddresses" {
