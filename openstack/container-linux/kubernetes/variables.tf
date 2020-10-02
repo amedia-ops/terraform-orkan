@@ -150,6 +150,18 @@ EOD
   default     = "10.3.0.0/16"
 }
 
+variable "enable_reporting" {
+  type        = bool
+  description = "Enable usage or analytics reporting to upstreams (Calico)"
+  default     = false
+}
+
+variable "enable_aggregation" {
+  type        = bool
+  description = "Enable the Kubernetes Aggregation Layer (defaults to false)"
+  default     = false
+}
+
 variable "oidc_client_id" {
   type        = string
   description = "The OIDC client ID to use for authorization against Google."
