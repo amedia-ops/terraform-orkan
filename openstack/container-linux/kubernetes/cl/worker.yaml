@@ -120,6 +120,7 @@ networkd:
         Gateway=${eth1_gateway}
         DNS=87.238.33.1
         Domains=${dns_zone}
+        IPv6AcceptRA=no
 storage:
   files:
     - path: /etc/hostname
