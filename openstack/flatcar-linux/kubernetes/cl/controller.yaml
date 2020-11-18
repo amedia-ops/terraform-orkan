@@ -2,37 +2,38 @@
 systemd:
   units:
     - name: etcd-member.service
-      enable: true
-      dropins:
-        - name: 40-etcd-cluster.conf
-          contents: |
-            [Service]
-            Environment="ETCD_IMAGE_TAG=v3.4.9"
-            Environment="ETCD_IMAGE_URL=docker://quay.io/coreos/etcd"
-            Environment="RKT_RUN_ARGS=--insecure-options=image"
-            Environment="ETCD_NAME=${etcd_name}"
-            Environment="ETCD_ADVERTISE_CLIENT_URLS=https://${etcd_domain}:2379"
-            Environment="ETCD_INITIAL_ADVERTISE_PEER_URLS=https://${etcd_domain}:2380"
-            Environment="ETCD_LISTEN_CLIENT_URLS=https://0.0.0.0:2379"
-            Environment="ETCD_LISTEN_PEER_URLS=https://0.0.0.0:2380"
-            Environment="ETCD_LISTEN_METRICS_URLS=http://0.0.0.0:2381"
-            Environment="ETCD_INITIAL_CLUSTER=${etcd_initial_cluster}"
-            Environment="ETCD_STRICT_RECONFIG_CHECK=true"
-            Environment="ETCD_SSL_DIR=/etc/ssl/etcd"
-            Environment="ETCD_TRUSTED_CA_FILE=/etc/ssl/certs/etcd/server-ca.crt"
-            Environment="ETCD_CERT_FILE=/etc/ssl/certs/etcd/server.crt"
-            Environment="ETCD_KEY_FILE=/etc/ssl/certs/etcd/server.key"
-            Environment="ETCD_CLIENT_CERT_AUTH=true"
-            Environment="ETCD_PEER_TRUSTED_CA_FILE=/etc/ssl/certs/etcd/peer-ca.crt"
-            Environment="ETCD_PEER_CERT_FILE=/etc/ssl/certs/etcd/peer.crt"
-            Environment="ETCD_PEER_KEY_FILE=/etc/ssl/certs/etcd/peer.key"
-            Environment="ETCD_PEER_CLIENT_CERT_AUTH=true"
+      enabled: true
+      contents: |
+        [Unit]
+        Description=etcd (System Container)
+        Documentation=https://github.com/etcd-io/etcd
+        Requires=docker.service
+        After=docker.service
+        [Service]
+        Environment=ETCD_IMAGE=quay.io/coreos/etcd:v3.4.12
+        ExecStartPre=/usr/bin/docker run -d \
+          --name etcd \
+          --network host \
+          --env-file /etc/etcd/etcd.env \
+          --user 232:232 \
+          --volume /etc/ssl/etcd:/etc/ssl/certs:ro \
+          --volume /var/lib/etcd:/var/lib/etcd:rw \
+          $${ETCD_IMAGE}
+        ExecStart=docker logs -f etcd
+        ExecStop=docker stop etcd
+        ExecStopPost=docker rm etcd
+        Restart=always
+        RestartSec=10s
+        TimeoutStartSec=0
+        LimitNOFILE=40000
+        [Install]
+        WantedBy=multi-user.target
     - name: docker.service
-      enable: true
+      enabled: true
     - name: locksmithd.service
       mask: true
     - name: wait-for-dns.service
-      enable: true
+      enabled: true
       contents: |
         [Unit]
         Description=Wait for DNS entries
@@ -46,52 +47,39 @@ systemd:
         RequiredBy=kubelet.service
         RequiredBy=etcd-member.service
     - name: kubelet.service
-      enable: true
+      enabled: true
       contents: |
         [Unit]
-        Description=Kubelet
+        Description=Kubelet (System Container)
+        Requires=docker.service
+        After=docker.service
         Wants=rpc-statd.service
         [Service]
-        Environment=KUBELET_IMAGE=${kubelet_image}
+        Environment=KUBELET_IMAGE=quay.io/poseidon/kubelet:v1.19.4
         ExecStartPre=/bin/mkdir -p /etc/kubernetes/cni/net.d
         ExecStartPre=/bin/mkdir -p /etc/kubernetes/manifests
         ExecStartPre=/bin/mkdir -p /opt/cni/bin
         ExecStartPre=/bin/mkdir -p /var/lib/calico
         ExecStartPre=/bin/mkdir -p /var/lib/kubelet/volumeplugins
         ExecStartPre=/usr/bin/bash -c "grep 'certificate-authority-data' /etc/kubernetes/kubeconfig | awk '{print $2}' | base64 -d > /etc/kubernetes/ca.crt"
-        ExecStartPre=-/usr/bin/rkt rm --uuid-file=/var/cache/kubelet-pod.uuid
-        ExecStart=/usr/bin/rkt run \
-          --uuid-file-save=/var/cache/kubelet-pod.uuid \
-          --stage1-from-dir=stage1-fly.aci \
-          --hosts-entry host \
-          --insecure-options=image \
-          --volume etc-kubernetes,kind=host,source=/etc/kubernetes,readOnly=true \
-          --mount volume=etc-kubernetes,target=/etc/kubernetes \
-          --volume etc-machine-id,kind=host,source=/etc/machine-id,readOnly=true \
-          --mount volume=etc-machine-id,target=/etc/machine-id \
-          --volume etc-os-release,kind=host,source=/usr/lib/os-release,readOnly=true \
-          --mount volume=etc-os-release,target=/etc/os-release \
-          --volume=etc-resolv,kind=host,source=/etc/resolv.conf,readOnly=true \
-          --mount volume=etc-resolv,target=/etc/resolv.conf \
-          --volume etc-ssl-certs,kind=host,source=/etc/ssl/certs,readOnly=true \
-          --mount volume=etc-ssl-certs,target=/etc/ssl/certs \
-          --volume lib-modules,kind=host,source=/lib/modules,readOnly=true \
-          --mount volume=lib-modules,target=/lib/modules \
-          --volume run,kind=host,source=/run \
-          --mount volume=run,target=/run \
-          --volume usr-share-certs,kind=host,source=/usr/share/ca-certificates,readOnly=true \
-          --mount volume=usr-share-certs,target=/usr/share/ca-certificates \
-          --volume var-lib-calico,kind=host,source=/var/lib/calico,readOnly=true \
-          --mount volume=var-lib-calico,target=/var/lib/calico \
-          --volume var-lib-docker,kind=host,source=/var/lib/docker \
-          --mount volume=var-lib-docker,target=/var/lib/docker \
-          --volume var-lib-kubelet,kind=host,source=/var/lib/kubelet,recursive=true \
-          --mount volume=var-lib-kubelet,target=/var/lib/kubelet \
-          --volume var-log,kind=host,source=/var/log \
-          --mount volume=var-log,target=/var/log \
-          --volume opt-cni-bin,kind=host,source=/opt/cni/bin \
-          --mount volume=opt-cni-bin,target=/opt/cni/bin \
-          $${KUBELET_IMAGE} -- \
+        ExecStartPre=/usr/bin/docker run -d \
+          --name kubelet \
+          --privileged \
+          --pid host \
+          --network host \
+          -v /etc/kubernetes:/etc/kubernetes:ro \
+          -v /etc/machine-id:/etc/machine-id:ro \
+          -v /usr/lib/os-release:/etc/os-release:ro \
+          -v /lib/modules:/lib/modules:ro \
+          -v /run:/run \
+          -v /sys/fs/cgroup:/sys/fs/cgroup:ro \
+          -v /sys/fs/cgroup/systemd:/sys/fs/cgroup/systemd \
+          -v /var/lib/calico:/var/lib/calico:ro \
+          -v /var/lib/docker:/var/lib/docker \
+          -v /var/lib/kubelet:/var/lib/kubelet:rshared \
+          -v /var/log:/var/log \
+          -v /opt/cni/bin:/opt/cni/bin \
+          $${KUBELET_IMAGE} \
           --anonymous-auth=false \
           --authentication-token-webhook \
           --authorization-mode=Webhook \
@@ -101,21 +89,21 @@ systemd:
           --cluster_domain=${cluster_domain_suffix} \
           --cni-conf-dir=/etc/kubernetes/cni/net.d \
           --enable-cadvisor-json-endpoints \
-          --exit-on-lock-contention \
           --healthz-port=0 \
           --kubeconfig=/var/lib/kubelet/kubeconfig \
-          --lock-file=/var/run/lock/kubelet.lock \
           --network-plugin=cni \
           --node-ip=${eth1_address} \
           --node-labels=node.kubernetes.io/master \
           --node-labels=node.kubernetes.io/controller="true" \
           --node-labels=zone="${availability_zone}" \
           --pod-manifest-path=/etc/kubernetes/manifests \
-          --register-with-taints=node-role.kubernetes.io/master=:NoSchedule \
+          --register-with-taints=node-role.kubernetes.io/controller=:NoSchedule \
           --read-only-port=0 \
           --rotate-certificates \
           --volume-plugin-dir=/var/lib/kubelet/volumeplugins
-        ExecStop=-/usr/bin/rkt stop --uuid-file=/var/cache/kubelet-pod.uuid
+        ExecStart=docker logs -f kubelet
+        ExecStop=docker stop kubelet
+        ExecStopPost=docker rm kubelet
         Restart=always
         RestartSec=10
         [Install]
@@ -124,24 +112,21 @@ systemd:
       contents: |
         [Unit]
         Description=Kubernetes control plane
+        Wants=docker.service
+        After=docker.service
         ConditionPathExists=!/opt/bootstrap/bootstrap.done
         [Service]
         Type=oneshot
         RemainAfterExit=true
         WorkingDirectory=/opt/bootstrap
-        ExecStart=/usr/bin/rkt run \
-            --trust-keys-from-https \
-            --volume config,kind=host,source=/etc/kubernetes/bootstrap-secrets \
-            --mount volume=config,target=/etc/kubernetes/secrets \
-            --volume assets,kind=host,source=/opt/bootstrap/assets \
-            --mount volume=assets,target=/assets \
-            --volume script,kind=host,source=/opt/bootstrap/apply \
-            --mount volume=script,target=/apply \
-            --insecure-options=image \
-            ${kubelet_image} \
-            --net=host \
-            --dns=host \
-            --exec=/apply
+        Environment=KUBELET_IMAGE=quay.io/poseidon/kubelet:v1.19.4
+        ExecStart=/usr/bin/docker run \
+            --network host \
+            -v /etc/kubernetes/bootstrap-secrets:/etc/kubernetes/secrets:ro \
+            -v /opt/bootstrap/assets:/assets:ro \
+            -v /opt/bootstrap/apply:/apply:ro \
+            --entrypoint=/apply \
+            $${KUBELET_IMAGE}
         ExecStartPost=/bin/touch /opt/bootstrap/bootstrap.done
         [Install]
         WantedBy=multi-user.target
@@ -172,6 +157,11 @@ networkd:
         Domains=${dns_zone}
         IPv6AcceptRA=no
 storage:
+  directories:
+    - path: /var/lib/etcd
+      filesystem: root
+      mode: 0700
+      overwrite: true
   files:
     - path: /etc/hostname
       filesystem: root
@@ -199,6 +189,7 @@ storage:
           mv tls/etcd/etcd-client* /etc/kubernetes/bootstrap-secrets/
           chown -R etcd:etcd /etc/ssl/etcd
           chmod -R 500 /etc/ssl/etcd
+          chmod -R 700 /var/lib/etcd
           mv auth/kubeconfig /etc/kubernetes/bootstrap-secrets/
           mv tls/k8s/* /etc/kubernetes/bootstrap-secrets/
           mkdir -p /etc/kubernetes/manifests
@@ -224,9 +215,32 @@ storage:
           done
     - path: /etc/sysctl.d/max-user-watches.conf
       filesystem: root
+      mode: 0644
       contents:
         inline: |
           fs.inotify.max_user_watches=16184
+    - path: /etc/etcd/etcd.env
+      filesystem: root
+      mode: 0644
+      contents:
+          inline: |
+            ETCD_NAME=${etcd_name}
+            ETCD_DATA_DIR=/var/lib/etcd
+            ETCD_ADVERTISE_CLIENT_URLS=https://${etcd_domain}:2379
+            ETCD_INITIAL_ADVERTISE_PEER_URLS=https://${etcd_domain}:2380
+            ETCD_LISTEN_CLIENT_URLS=https://0.0.0.0:2379
+            ETCD_LISTEN_PEER_URLS=https://0.0.0.0:2380
+            ETCD_LISTEN_METRICS_URLS=http://0.0.0.0:2381
+            ETCD_INITIAL_CLUSTER=${etcd_initial_cluster}
+            ETCD_STRICT_RECONFIG_CHECK=true
+            ETCD_TRUSTED_CA_FILE=/etc/ssl/certs/etcd/server-ca.crt
+            ETCD_CERT_FILE=/etc/ssl/certs/etcd/server.crt
+            ETCD_KEY_FILE=/etc/ssl/certs/etcd/server.key
+            ETCD_CLIENT_CERT_AUTH=true
+            ETCD_PEER_TRUSTED_CA_FILE=/etc/ssl/certs/etcd/peer-ca.crt
+            ETCD_PEER_CERT_FILE=/etc/ssl/certs/etcd/peer.crt
+            ETCD_PEER_KEY_FILE=/etc/ssl/certs/etcd/peer.key
+            ETCD_PEER_CLIENT_CERT_AUTH=true
 passwd:
   users:
     - name: core

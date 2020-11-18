@@ -99,13 +99,13 @@ variable "os_worker_image" {
   default     = "coreos-stable"
 }
 
-variable "controller_clc_snippets" {
+variable "controller_snippets" {
   type        = list(string)
   description = "Controller Container Linux Config snippets"
   default     = []
 }
 
-variable "worker_clc_snippets" {
+variable "worker_snippets" {
   type        = list(string)
   description = "Worker Container Linux Config snippets"
   default     = []
@@ -116,11 +116,6 @@ variable "worker_clc_snippets" {
 variable "ssh_authorized_key" {
   type        = string
   description = "SSH public key for user 'core'"
-}
-
-variable "asset_dir" {
-  type        = string
-  description = "Absolute path to a directory where generated assets should be placed (contains secrets)"
 }
 
 variable "networking" {

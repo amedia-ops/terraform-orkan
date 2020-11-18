@@ -35,7 +35,7 @@ resource "openstack_compute_instance_v2" "controllers" {
   tags              = [var.cluster_name]
   flavor_name       = var.controller_type
   image_name        = var.os_controller_image
-  user_data         = element(data.ct_config.controller-ignitions.*.rendered, count.index)
+  user_data         = data.ct_config.controller-ignitions.*.rendered[count.index]
   availability_zone = element(var.availability_zones, count.index)
   network {
     port = element(openstack_networking_port_v2.controller-ports.*.id, count.index)
@@ -50,13 +50,10 @@ resource "openstack_compute_instance_v2" "controllers" {
 
 # Controller Ignition configs
 data "ct_config" "controller-ignitions" {
-  count = var.controller_count
-  content = element(
-    data.template_file.controller-configs.*.rendered,
-    count.index,
-  )
-  pretty_print = false
-  snippets     = var.controller_clc_snippets
+  count    = var.controller_count
+  content  = data.template_file.controller-configs.*.rendered[count.index]
+  strict   = true
+  snippets = var.controller_snippets
 }
 
 # Controller Container Linux configs

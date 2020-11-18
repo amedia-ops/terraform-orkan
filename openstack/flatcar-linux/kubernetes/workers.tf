@@ -31,7 +31,7 @@ resource "openstack_compute_instance_v2" "workers" {
   tags              = [var.cluster_name]
   flavor_name       = var.worker_type
   image_name        = var.os_worker_image
-  user_data         = element(data.ct_config.worker-ignitions.*.rendered, count.index)
+  user_data         = data.ct_config.worker-ignitions.*.rendered[count.index]
   availability_zone = element(var.availability_zones, count.index)
   network {
     port = element(openstack_networking_port_v2.worker-ports.*.id, count.index)
@@ -46,13 +46,10 @@ resource "openstack_compute_instance_v2" "workers" {
 
 # Worker Ignition config
 data "ct_config" "worker-ignitions" {
-  count = var.worker_count
-  content = element(
-    data.template_file.worker-configs.*.rendered,
-    count.index,
-  )
-  pretty_print = false
-  snippets     = var.worker_clc_snippets
+  count    = var.worker_count
+  content  = data.template_file.worker-configs.*.rendered[count.index]
+  strict   = true
+  snippets = var.worker_snippets
 }
 
 # Worker Container Linux config

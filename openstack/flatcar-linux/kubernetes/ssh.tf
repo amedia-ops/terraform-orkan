@@ -7,7 +7,7 @@ locals {
   ]
 }
 
-# Secure copy assets to controllers.
+# Secure copy assets to controllers. Activates kubelet.service
 resource "null_resource" "copy-controller-secrets" {
   count = var.controller_count
 
@@ -38,12 +38,12 @@ resource "null_resource" "copy-controller-secrets" {
       "sudo mkdir -p /var/lib/kubelet",
       "sudo mv $HOME/config.json /var/lib/kubelet/config.json",
       "sudo chown root: /var/lib/kubelet/config.json",
-      "sudo chown 400 /var/lib/kubelet/config.json",
+      "sudo chmod 400 /var/lib/kubelet/config.json",
     ]
   }
 }
 
-# Secure copy kubeconfig to all workers. Activates kubelet.service.
+# Secure copy config.json to all workers.
 resource "null_resource" "copy-worker-secrets" {
   count = var.worker_count
   triggers = {
@@ -58,18 +58,12 @@ resource "null_resource" "copy-worker-secrets" {
   }
 
   provisioner "file" {
-    content     = module.bootstrap.kubeconfig-kubelet
-    destination = "$HOME/kubeconfig"
-  }
-
-  provisioner "file" {
     content     = "{\"auths\":{\"https://eu.gcr.io\":{\"auth\":\"${var.eu_gcr_auth}\"}}}"
     destination = "$HOME/config.json"
   }
 
   provisioner "remote-exec" {
     inline = [
-      "sudo mv $HOME/kubeconfig /etc/kubernetes/kubeconfig",
       "sudo mkdir -p /var/lib/kubelet",
       "sudo mv $HOME/config.json /var/lib/kubelet/config.json",
       "sudo chown root: /var/lib/kubelet/config.json",
