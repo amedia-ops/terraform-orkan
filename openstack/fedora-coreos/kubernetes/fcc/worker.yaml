@@ -1,0 +1,182 @@
+---
+variant: fcos
+version: 1.1.0
+systemd:
+  units:
+    - name: afterburn-sshkeys@core.service
+      enabled: false
+    - name: docker.service
+      enabled: true
+    - name: wait-for-dns.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Wait for DNS entries
+        Before=kubelet.service
+        [Service]
+        Type=oneshot
+        RemainAfterExit=true
+        ExecStart=/bin/sh -c 'while ! /usr/bin/grep '^[^#[:space:]]' /etc/resolv.conf > /dev/null; do sleep 1; done'
+        [Install]
+        RequiredBy=kubelet.service
+    - name: kubelet.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Kubelet (System Container)
+        Wants=rpc-statd.service
+        [Service]
+        Environment=KUBELET_IMAGE=quay.io/poseidon/kubelet:v1.19.4
+        ExecStartPre=/bin/mkdir -p /etc/kubernetes/cni/net.d
+        ExecStartPre=/bin/mkdir -p /etc/kubernetes/manifests
+        ExecStartPre=/bin/mkdir -p /opt/cni/bin
+        ExecStartPre=/bin/mkdir -p /var/lib/calico
+        ExecStartPre=/bin/mkdir -p /var/lib/kubelet/volumeplugins
+        ExecStartPre=/usr/bin/bash -c "grep 'certificate-authority-data' /etc/kubernetes/kubeconfig | awk '{print $2}' | base64 -d > /etc/kubernetes/ca.crt"
+        ExecStartPre=-/usr/bin/podman rm kubelet
+        ExecStart=/usr/bin/podman run --name kubelet \
+          --privileged \
+          --pid host \
+          --network host \
+          --volume /etc/kubernetes:/etc/kubernetes:ro,z \
+          --volume /usr/lib/os-release:/etc/os-release:ro \
+          --volume /lib/modules:/lib/modules:ro \
+          --volume /run:/run \
+          --volume /sys/fs/cgroup:/sys/fs/cgroup:ro \
+          --volume /sys/fs/cgroup/systemd:/sys/fs/cgroup/systemd \
+          --volume /var/lib/calico:/var/lib/calico:ro \
+          --volume /var/lib/docker:/var/lib/docker \
+          --volume /var/lib/kubelet:/var/lib/kubelet:rshared,z \
+          --volume /var/log:/var/log \
+          --volume /var/run/lock:/var/run/lock:z \
+          --volume /opt/cni/bin:/opt/cni/bin:z \
+          $${KUBELET_IMAGE} \
+          --anonymous-auth=false \
+          --authentication-token-webhook \
+          --authorization-mode=Webhook \
+          --bootstrap-kubeconfig=/etc/kubernetes/kubeconfig \
+          --cgroup-driver=systemd \
+          --cgroups-per-qos=true \
+          --enforce-node-allocatable=pods \
+          --client-ca-file=/etc/kubernetes/ca.crt \
+          --cluster_dns=${cluster_dns_service_ip} \
+          --cluster_domain=${cluster_domain_suffix} \
+          --cni-conf-dir=/etc/kubernetes/cni/net.d \
+          --enable-cadvisor-json-endpoints \
+          --healthz-port=0 \
+          --kubeconfig=/var/lib/kubelet/kubeconfig \
+          --network-plugin=cni \
+          --node-ip=${eth1_address} \
+          --node-labels=node.kubernetes.io/node \
+          --node-labels=zone="${availability_zone}" \
+          --pod-manifest-path=/etc/kubernetes/manifests \
+          --read-only-port=0 \
+          --rotate-certificates \
+          --volume-plugin-dir=/var/lib/kubelet/volumeplugins
+        ExecStop=-/usr/bin/podman stop kubelet
+        Delegate=yes
+        Restart=always
+        RestartSec=10
+        [Install]
+        WantedBy=multi-user.target
+    - name: delete-node.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Delete Kubernetes node on shutdown
+        [Service]
+        Environment=KUBELET_IMAGE=quay.io/poseidon/kubelet:v1.19.4
+        Type=oneshot
+        RemainAfterExit=true
+        ExecStart=/bin/true
+        ExecStop=/bin/bash -c '/usr/bin/podman run --volume /var/lib/kubelet:/var/lib/kubelet:ro,z --entrypoint /usr/local/bin/kubectl $${KUBELET_IMAGE} --kubeconfig=/var/lib/kubelet/kubeconfig delete node $HOSTNAME'
+        [Install]
+        WantedBy=multi-user.target
+storage:
+  directories:
+    - path: /etc/kubernetes
+  files:
+    - path: /etc/ssh/sshd_config.d/10-insecure-rsa-keysig.conf
+      mode: 0600
+      contents:
+        inline: |
+          PubkeyAcceptedKeyTypes=+ssh-rsa
+    - path: /etc/zincati/config.d/55-update-strategy.toml
+      contents:
+        inline: |
+          [updates]
+          strategy = "fleet_lock"
+          [updates.fleet_lock]
+          base_url = "http://${zincati_service}/"
+    - path: /etc/hostname
+      mode: 0420
+      contents:
+        inline: |
+          ${hostname}
+    - path: /etc/kubernetes/kubeconfig
+      mode: 0644
+      contents:
+        inline: |
+          ${kubeconfig}
+    - path: /etc/sysctl.d/max-user-watches.conf
+      contents:
+        inline: |
+          fs.inotify.max_user_watches=16184
+    - path: /etc/sysctl.d/reverse-path-filter.conf
+      contents:
+        inline: |
+          net.ipv4.conf.default.rp_filter=0
+          net.ipv4.conf.*.rp_filter=0
+    - path: /etc/systemd/network/50-flannel.link
+      contents:
+        inline: |
+          [Match]
+          OriginalName=flannel*
+          [Link]
+          MACAddressPolicy=none
+    - path: /etc/systemd/system.conf.d/accounting.conf
+      contents:
+        inline: |
+          [Manager]
+          DefaultCPUAccounting=yes
+          DefaultMemoryAccounting=yes
+          DefaultBlockIOAccounting=yes
+    - path: /etc/NetworkManager/system-connections/ens3.nmconnection
+      mode: 0600
+      overwrite: true
+      contents:
+        inline: |
+          [connection]
+          type=ethernet
+          interface-name=ens3
+
+          [ipv4]
+          method=manual
+          addresses=${eth0_address}/24
+
+          [ipv6]
+          method=auto
+          addr-gen-mode=0
+    - path: /etc/NetworkManager/system-connections/ens4.nmconnection
+      mode: 0600
+      overwrite: true
+      contents:
+        inline: |
+          [connection]
+          type=ethernet
+          interface-name=ens4
+
+          [ipv4]
+          method=manual
+          addresses=${eth1_address}/26
+          gateway=${eth1_gateway}
+          dns=87.238.33.1
+          dns-search=${dns_zone}
+
+          [ipv6]
+          method=disabled
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - ${ssh_authorized_key}

@@ -1,0 +1,291 @@
+---
+variant: fcos
+version: 1.1.0
+systemd:
+  units:
+    - name: etcd-member.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=etcd (System Container)
+        Documentation=https://github.com/etcd-io/etcd
+        Wants=network-online.target network.target
+        After=network-online.target
+        [Service]
+        Environment=ETCD_IMAGE=quay.io/coreos/etcd:v3.4.12
+        Type=exec
+        ExecStartPre=/bin/mkdir -p /var/lib/etcd
+        ExecStartPre=-/usr/bin/podman rm etcd
+        ExecStart=/usr/bin/podman run --name etcd \
+          --env-file /etc/etcd/etcd.env \
+          --network host \
+          --volume /var/lib/etcd:/var/lib/etcd:rw,Z \
+          --volume /etc/ssl/etcd:/etc/ssl/certs:ro,Z \
+          $${ETCD_IMAGE}
+        ExecStop=/usr/bin/podman stop etcd
+        Restart=on-failure
+        RestartSec=10s
+        TimeoutStartSec=0
+        LimitNOFILE=40000
+        [Install]
+        WantedBy=multi-user.target
+    - name: afterburn-sshkeys@core.service
+      enabled: false
+    - name: docker.service
+      enabled: true
+    - name: wait-for-dns.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Wait for DNS entries
+        Before=kubelet.service
+        [Service]
+        Type=oneshot
+        RemainAfterExit=true
+        ExecStart=/bin/sh -c 'while ! /usr/bin/grep '^[^#[:space:]]' /etc/resolv.conf > /dev/null; do sleep 1; done'
+        [Install]
+        RequiredBy=kubelet.service
+        RequiredBy=etcd-member.service
+    - name: kubelet.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Kubelet (System Container)
+        Wants=rpc-statd.service
+        [Service]
+        Environment=KUBELET_IMAGE=quay.io/poseidon/kubelet:v1.19.4
+        ExecStartPre=/bin/mkdir -p /etc/kubernetes/cni/net.d
+        ExecStartPre=/bin/mkdir -p /etc/kubernetes/manifests
+        ExecStartPre=/bin/mkdir -p /opt/cni/bin
+        ExecStartPre=/bin/mkdir -p /var/lib/calico
+        ExecStartPre=/bin/mkdir -p /var/lib/kubelet/volumeplugins
+        ExecStartPre=/usr/bin/bash -c "grep 'certificate-authority-data' /etc/kubernetes/kubeconfig | awk '{print $2}' | base64 -d > /etc/kubernetes/ca.crt"
+        ExecStartPre=-/usr/bin/podman rm kubelet
+        ExecStart=/usr/bin/podman run --name kubelet \
+          --privileged \
+          --pid host \
+          --network host \
+          --volume /etc/kubernetes:/etc/kubernetes:ro,z \
+          --volume /usr/lib/os-release:/etc/os-release:ro \
+          --volume /lib/modules:/lib/modules:ro \
+          --volume /run:/run \
+          --volume /sys/fs/cgroup:/sys/fs/cgroup:ro \
+          --volume /sys/fs/cgroup/systemd:/sys/fs/cgroup/systemd \
+          --volume /var/lib/calico:/var/lib/calico:ro \
+          --volume /var/lib/docker:/var/lib/docker \
+          --volume /var/lib/kubelet:/var/lib/kubelet:rshared,z \
+          --volume /var/log:/var/log \
+          --volume /var/run/lock:/var/run/lock:z \
+          --volume /opt/cni/bin:/opt/cni/bin:z \
+          $${KUBELET_IMAGE} \
+          --anonymous-auth=false \
+          --authentication-token-webhook \
+          --authorization-mode=Webhook \
+          --bootstrap-kubeconfig=/etc/kubernetes/kubeconfig \
+          --cgroup-driver=systemd \
+          --cgroups-per-qos=true \
+          --enforce-node-allocatable=pods \
+          --client-ca-file=/etc/kubernetes/ca.crt \
+          --cluster_dns=${cluster_dns_service_ip} \
+          --cluster_domain=${cluster_domain_suffix} \
+          --cni-conf-dir=/etc/kubernetes/cni/net.d \
+          --enable-cadvisor-json-endpoints \
+          --healthz-port=0 \
+          --kubeconfig=/var/lib/kubelet/kubeconfig \
+          --network-plugin=cni \
+          --node-ip=${eth1_address} \
+          --node-labels=node.kubernetes.io/master \
+          --node-labels=node.kubernetes.io/controller="true" \
+          --node-labels=zone="${availability_zone}" \
+          --pod-manifest-path=/etc/kubernetes/manifests \
+          --read-only-port=0 \
+          --register-with-taints=node-role.kubernetes.io/controller=:NoSchedule \
+          --rotate-certificates \
+          --volume-plugin-dir=/var/lib/kubelet/volumeplugins
+        ExecStop=-/usr/bin/podman stop kubelet
+        Delegate=yes
+        Restart=always
+        RestartSec=10
+        [Install]
+        WantedBy=multi-user.target
+    - name: bootstrap.service
+      contents: |
+        [Unit]
+        Description=Kubernetes control plane
+        ConditionPathExists=!/opt/bootstrap/bootstrap.done
+        [Service]
+        Type=oneshot
+        RemainAfterExit=true
+        WorkingDirectory=/opt/bootstrap
+        ExecStartPre=-/usr/bin/podman rm bootstrap
+        ExecStart=/usr/bin/podman run --name bootstrap \
+            --network host \
+            --volume /etc/kubernetes/bootstrap-secrets:/etc/kubernetes/secrets:ro,z \
+            --volume /opt/bootstrap/assets:/assets:ro,Z \
+            --volume /opt/bootstrap/apply:/apply:ro,Z \
+            --entrypoint=/apply \
+            quay.io/poseidon/kubelet:v1.19.4
+        ExecStartPost=/bin/touch /opt/bootstrap/bootstrap.done
+        ExecStartPost=-/usr/bin/podman stop bootstrap
+storage:
+  directories:
+    - path: /var/lib/etcd
+      mode: 0700
+    - path: /etc/kubernetes
+    - path: /opt/bootstrap
+  files:
+    - path: /etc/ssh/sshd_config.d/10-insecure-rsa-keysig.conf
+      mode: 0600
+      contents:
+        inline: |
+          PubkeyAcceptedKeyTypes=+ssh-rsa
+    - path: /etc/zincati/config.d/55-update-strategy.toml
+      contents:
+        inline: |
+          [updates]
+          strategy = "fleet_lock"
+          [updates.fleet_lock]
+          base_url = "http://${zincati_service}/"
+    - path: /etc/hostname
+      mode: 0420
+      contents:
+        inline: |
+          ${hostname}
+    - path: /etc/kubernetes/kubeconfig
+      mode: 0644
+      contents:
+        inline: |
+          ${kubeconfig}
+    - path: /opt/bootstrap/layout
+      mode: 0544
+      contents:
+        inline: |
+          #!/bin/bash -e
+          mkdir -p -- auth tls/etcd tls/k8s static-manifests manifests/coredns manifests-networking
+          awk '/#####/ {filename=$2; next} {print > filename}' assets
+          mkdir -p /etc/ssl/etcd/etcd
+          mkdir -p /etc/kubernetes/bootstrap-secrets
+          mv tls/etcd/{peer*,server*} /etc/ssl/etcd/etcd/
+          mv tls/etcd/etcd-client* /etc/kubernetes/bootstrap-secrets/
+          chown -R etcd:etcd /etc/ssl/etcd
+          chmod -R 500 /etc/ssl/etcd
+          mv auth/kubeconfig /etc/kubernetes/bootstrap-secrets/
+          mv tls/k8s/* /etc/kubernetes/bootstrap-secrets/
+          mkdir -p /etc/kubernetes/manifests
+          mv static-manifests/* /etc/kubernetes/manifests/
+          mkdir -p /opt/bootstrap/assets
+          mv manifests /opt/bootstrap/assets/manifests
+          mv manifests-networking/* /opt/bootstrap/assets/manifests/
+          rm -rf assets auth static-manifests tls manifests-networking
+          chcon -R -u system_u -t container_file_t /etc/kubernetes/bootstrap-secrets
+    - path: /opt/bootstrap/apply
+      mode: 0544
+      contents:
+        inline: |
+          #!/bin/bash -e
+          export KUBECONFIG=/etc/kubernetes/secrets/kubeconfig
+          until kubectl version; do
+            echo "Waiting for static pod control plane"
+            sleep 5
+          done
+          until kubectl apply -f /assets/manifests -R; do
+             echo "Retry applying manifests"
+             sleep 5
+          done
+    - path: /etc/sysctl.d/max-user-watches.conf
+      contents:
+        inline: |
+          fs.inotify.max_user_watches=16184
+    - path: /etc/sysctl.d/reverse-path-filter.conf
+      contents:
+        inline: |
+          net.ipv4.conf.default.rp_filter=0
+          net.ipv4.conf.*.rp_filter=0
+    - path: /etc/systemd/network/50-flannel.link
+      contents:
+        inline: |
+          [Match]
+          OriginalName=flannel*
+          [Link]
+          MACAddressPolicy=none
+    - path: /etc/systemd/system.conf.d/accounting.conf
+      contents:
+        inline: |
+          [Manager]
+          DefaultCPUAccounting=yes
+          DefaultMemoryAccounting=yes
+          DefaultBlockIOAccounting=yes
+    - path: /etc/etcd/etcd.env
+      mode: 0644
+      contents:
+          inline: |
+            ETCD_NAME=${etcd_name}
+            ETCD_DATA_DIR=/var/lib/etcd
+            ETCD_ADVERTISE_CLIENT_URLS=https://${etcd_domain}:2379
+            ETCD_INITIAL_ADVERTISE_PEER_URLS=https://${etcd_domain}:2380
+            ETCD_LISTEN_CLIENT_URLS=https://0.0.0.0:2379
+            ETCD_LISTEN_PEER_URLS=https://0.0.0.0:2380
+            ETCD_LISTEN_METRICS_URLS=http://0.0.0.0:2381
+            ETCD_INITIAL_CLUSTER=${etcd_initial_cluster}
+            ETCD_STRICT_RECONFIG_CHECK=true
+            ETCD_TRUSTED_CA_FILE=/etc/ssl/certs/etcd/server-ca.crt
+            ETCD_CERT_FILE=/etc/ssl/certs/etcd/server.crt
+            ETCD_KEY_FILE=/etc/ssl/certs/etcd/server.key
+            ETCD_CLIENT_CERT_AUTH=true
+            ETCD_PEER_TRUSTED_CA_FILE=/etc/ssl/certs/etcd/peer-ca.crt
+            ETCD_PEER_CERT_FILE=/etc/ssl/certs/etcd/peer.crt
+            ETCD_PEER_KEY_FILE=/etc/ssl/certs/etcd/peer.key
+            ETCD_PEER_CLIENT_CERT_AUTH=true
+    - path: /etc/NetworkManager/system-connections/ens3.nmconnection
+      mode: 0600
+      overwrite: true
+      contents:
+        inline: |
+          [connection]
+          type=ethernet
+          interface-name=ens3
+
+          [ipv4]
+          method=manual
+          addresses=${eth0_address}/24
+
+          [ipv6]
+          method=auto
+          addr-gen-mode=0
+    - path: /etc/NetworkManager/system-connections/ens4.nmconnection
+      mode: 0600
+      overwrite: true
+      contents:
+        inline: |
+          [connection]
+          type=ethernet
+          interface-name=ens4
+
+          [ipv4]
+          method=manual
+          addresses=${eth1_address}/26
+          gateway=${eth1_gateway}
+          dns=87.238.33.1
+          dns-search=${dns_zone}
+
+          [ipv6]
+          method=disabled
+    - path: /etc/NetworkManager/dispatcher.d/10-policy-route
+      mode: 0555
+      overwrite: true
+      contents:
+        inline: |
+          #!/bin/sh
+
+          interface=$1
+          action=$2
+
+          if [ "$action" = "up" ] && [ "$interface" = "ens3" ]; then
+            ip rule add from ${api_virtual_ip} table 256 pref 256
+            ip route add default via ${eth0_gateway} table 256
+          fi
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - ${ssh_authorized_key}
