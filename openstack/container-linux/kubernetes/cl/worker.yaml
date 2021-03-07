@@ -111,6 +111,7 @@ networkd:
         Name=eth0
         [Network]
         Address=${eth0_address}/24
+        IPv6AcceptRA=yes
     - name: eth1.network
       contents: |
         [Match]
