@@ -153,6 +153,7 @@ networkd:
         Name=eth0
         [Network]
         Address=${eth0_address}/24
+        IPv6AcceptRA=yes
         [Route]
         Gateway=${eth0_gateway}
         Table=256
